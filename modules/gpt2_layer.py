@@ -29,8 +29,11 @@ class GPT2Layer(nn.Module):
         before it is added to the sub-layer input. WE DO NOT APPLY THE LAYER NORM
         IN THIS FUNCTION.
     """
-    ### YOUR CODE HERE
-    raise NotImplementedError
+     # 1) Dropout applied to transformed output of each sub-layer (dense_layer is linear projection)
+    output = dropout(dense_layer(output)) 
+    # 2) sub-layer input+transformed output
+    output = output + input
+    return output
 
 
   def forward(self, hidden_states, attention_mask):
@@ -43,5 +46,23 @@ class GPT2Layer(nn.Module):
     """
 
     ### YOUR CODE HERE
-    raise NotImplementedError
+
+    # 1) first multi-head attention layer
+    residual = hidden_states
+    hidden_states = self.attention_layer_norm(hidden_states)
+    
+    hidden_states = self.self_attention(hidden_states, attention_mask) # multi-head attention layer
+
+    hidden_states = self.add(residual, hidden_states, self.attention_dense, self.attention_dropout) # linear+dropout+residual
+    
+    # 2) Feed-forward layer
+    residual = hidden_states
+    hidden_states = self.out_layer_norm(hidden_states)
+  
+    hidden_states = self.interm_dense(hidden_states) # First linear transformation
+    hidden_states = self.interm_af(hidden_states) # GELU activation
+    
+    hidden_states = self.add(residual, hidden_states, self.out_dense, self.out_dropout) # linear+dropout+residual
+
+    return hidden_states
 
