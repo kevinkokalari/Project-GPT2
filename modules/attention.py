@@ -34,7 +34,17 @@ class CausalSelfAttention(nn.Module):
   def attention(self, key, query, value, attention_mask):
 
     ### YOUR CODE HERE
-    raise NotImplementedError
+    attn = (query @ key.transpose(2, 3)) / (self.attention_head_size ** 0.5)
+    
+    seq_len = attn.size(-1)
+    mask = torch.triu(torch.ones(seq_len, seq_len, device=attn.device), diagonal=1).bool()
+    attn = attn.masked_fill(mask, float('-inf'))
+    
+    attn = attn + attention_mask
+    attn = self.dropout(torch.softmax(attn, dim=-1))
+    heads = attn @ value
+    output = rearrange(heads, 'b h t d -> b t (h d)')
+    return output
 
 
   def forward(self, hidden_states, attention_mask):
