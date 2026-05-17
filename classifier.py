@@ -22,6 +22,7 @@ from tqdm import tqdm
 import optuna 
 from glob import glob
 import os
+import gc
 
 TQDM_DISABLE = False
 
@@ -383,13 +384,14 @@ def objective(trial, args):
   """Objective function for Optuna hyperparameter search"""
   lr = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
   dropout = trial.suggest_float('hidden_dropout_prob', 0.1, 0.5)
-  batch_size = trial.suggest_categorical('batch_size', [8, 16, 32, 64])
+  batch_size = trial.suggest_categorical('batch_size', [8, 16, 32])
+  epochs = trial.suggest_categorical('epochs', [3, 5, 10])
 
-  config = SimpleNamespace(
+  sst_config = SimpleNamespace(
     filepath=f'sst-classifier-trial-{trial.number}.pt',
     lr=lr,
     use_gpu=args.use_gpu,
-    epochs=args.epochs,
+    epochs=epochs,
     batch_size=batch_size,
     hidden_dropout_prob=dropout,
     train='data/ids-sst-train.csv',
@@ -401,20 +403,43 @@ def objective(trial, args):
     subset=500, # smaller subset
     )
   
-  return train(config) 
+  cfimdb_config = SimpleNamespace(
+    filepath=f'cfimdb-classifier-trial-{trial.number}.pt',
+    lr=lr,
+    use_gpu=args.use_gpu,
+    epochs=epochs,
+    batch_size=batch_size,
+    hidden_dropout_prob=dropout,
+    train='data/ids-cfimdb-train.csv',
+    dev='data/ids-cfimdb-dev.csv',
+    test='data/ids-cfimdb-test-student.csv',
+    fine_tune_mode=args.fine_tune_mode,
+    dev_out='predictions/optuna-cfimdb-dev-out.csv',
+    test_out='predictions/optuna-cfimdb-test-out.csv',
+    subset=500, # smaller subset
+  )
+  sst_acc    = train(sst_config)
+  # clear gpu cache
+  torch.cuda.empty_cache()
+  gc.collect()
+
+  cfimdb_acc = train(cfimdb_config)
+  average_acc = (sst_acc + cfimdb_acc) / 2
+
+  return average_acc
 
 if __name__ == "__main__":
   args = get_args()
   seed_everything(args.seed)
 
   if args.search:
-    # hyperparamater search only on SST
-    print('Hyperparameter Classifier on SST...')
+    # hyperparamater search on SST and CFIMDB
+    print('Hyperparameter Classifier on SST and CFIMDB...')
     study = optuna.create_study(direction="maximize")
     study.optimize(lambda trial: objective(trial, args), n_trials=20)
-    print(f"Best best params: {study.best_params}")
+    print(f"Best params: {study.best_params}")
 
-    for f in glob('sst-classifier-trial-*.pt'):
+    for f in glob('sst-classifier-trial-*.pt') + glob('cfimdb-classifier-trial-*.pt'):
         os.remove(f)
   else: 
     print('Training Sentiment Classifier on SST...')
@@ -461,5 +486,5 @@ if __name__ == "__main__":
     print('Evaluating on cfimdb...')
     test(config)
 
-
+  
   
