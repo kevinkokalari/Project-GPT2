@@ -18,6 +18,11 @@ from models.gpt2 import GPT2Model
 from optimizer import AdamW
 from tqdm import tqdm
 
+# for hyperparameter search
+import optuna 
+from glob import glob
+import os
+
 TQDM_DISABLE = False
 
 
@@ -251,6 +256,10 @@ def train(args):
   train_data, num_labels = load_data(args.train, 'train')
   dev_data = load_data(args.dev, 'valid')
 
+  if args.subset: # smaller subset for hyperparameter search
+    train_data = train_data[:args.subset]
+    dev_data = dev_data[:args.subset//4]
+
   train_dataset = SentimentDataset(train_data, args)
   dev_dataset = SentimentDataset(dev_data, args)
 
@@ -308,6 +317,7 @@ def train(args):
       save_model(model, optimizer, args, config, args.filepath)
 
     print(f"Epoch {epoch}: train loss :: {train_loss :.3f}, train acc :: {train_acc :.3f}, dev acc :: {dev_acc :.3f}")
+  return best_dev_acc
 
 
 def test(args):
@@ -361,53 +371,95 @@ def get_args():
   parser.add_argument("--hidden_dropout_prob", type=float, default=0.3)
   parser.add_argument("--lr", type=float, help="learning rate, default lr for 'pretrain': 1e-3, 'finetune': 1e-5",
                       default=1e-3)
+  
+  # hyperparameter search
+  parser.add_argument("--search", action='store_true') 
+  parser.add_argument("--subset", type=int, default=None)
 
   args = parser.parse_args()
   return args
 
+def objective(trial, args):
+  """Objective function for Optuna hyperparameter search"""
+  lr = trial.suggest_float('lr', 1e-5, 1e-3, log=True)
+  dropout = trial.suggest_float('hidden_dropout_prob', 0.1, 0.5)
+  batch_size = trial.suggest_categorical('batch_size', [8, 16, 32, 64])
+
+  config = SimpleNamespace(
+    filepath=f'sst-classifier-trial-{trial.number}.pt',
+    lr=lr,
+    use_gpu=args.use_gpu,
+    epochs=args.epochs,
+    batch_size=batch_size,
+    hidden_dropout_prob=dropout,
+    train='data/ids-sst-train.csv',
+    dev='data/ids-sst-dev.csv',
+    test='data/ids-sst-test-student.csv',
+    fine_tune_mode=args.fine_tune_mode,
+    dev_out='predictions/optuna-sst-dev-out.csv',
+    test_out='predictions/optuna-sst-test-out.csv',
+    subset=500, # smaller subset
+    )
+  
+  return train(config) 
 
 if __name__ == "__main__":
   args = get_args()
   seed_everything(args.seed)
 
-  print('Training Sentiment Classifier on SST...')
-  config = SimpleNamespace(
-    filepath='sst-classifier.pt',
-    lr=args.lr,
-    use_gpu=args.use_gpu,
-    epochs=args.epochs,
-    batch_size=args.batch_size,
-    hidden_dropout_prob=args.hidden_dropout_prob,
-    train='data/ids-sst-train.csv',
-    dev='data/ids-sst-dev.csv',
-    test='data/ids-sst-test-student.csv',
-    fine_tune_mode=args.fine_tune_mode,
-    dev_out='predictions/' + args.fine_tune_mode + '-sst-dev-out.csv',
-    test_out='predictions/' + args.fine_tune_mode + '-sst-test-out.csv'
-  )
+  if args.search:
+    # hyperparamater search only on SST
+    print('Hyperparameter Classifier on SST...')
+    study = optuna.create_study(direction="maximize")
+    study.optimize(lambda trial: objective(trial, args), n_trials=20)
+    print(f"Best best params: {study.best_params}")
 
-  train(config)
+    for f in glob('sst-classifier-trial-*.pt'):
+        os.remove(f)
+  else: 
+    print('Training Sentiment Classifier on SST...')
+    config = SimpleNamespace(
+      filepath='sst-classifier.pt',
+      lr=args.lr,
+      use_gpu=args.use_gpu,
+      epochs=args.epochs,
+      batch_size=args.batch_size,
+      hidden_dropout_prob=args.hidden_dropout_prob,
+      train='data/ids-sst-train.csv',
+      dev='data/ids-sst-dev.csv',
+      test='data/ids-sst-test-student.csv',
+      fine_tune_mode=args.fine_tune_mode,
+      dev_out='predictions/' + args.fine_tune_mode + '-sst-dev-out.csv',
+      test_out='predictions/' + args.fine_tune_mode + '-sst-test-out.csv',
+      subset=None,
+    )
 
-  print('Evaluating on SST...')
-  test(config)
+    train(config)
 
-  print('Training Sentiment Classifier on cfimdb...')
-  config = SimpleNamespace(
-    filepath='cfimdb-classifier.pt',
-    lr=args.lr,
-    use_gpu=args.use_gpu,
-    epochs=args.epochs,
-    batch_size=8,
-    hidden_dropout_prob=args.hidden_dropout_prob,
-    train='data/ids-cfimdb-train.csv',
-    dev='data/ids-cfimdb-dev.csv',
-    test='data/ids-cfimdb-test-student.csv',
-    fine_tune_mode=args.fine_tune_mode,
-    dev_out='predictions/' + args.fine_tune_mode + '-cfimdb-dev-out.csv',
-    test_out='predictions/' + args.fine_tune_mode + '-cfimdb-test-out.csv'
-  )
+    print('Evaluating on SST...')
+    test(config)
 
-  train(config)
+    print('Training Sentiment Classifier on cfimdb...')
+    config = SimpleNamespace(
+      filepath='cfimdb-classifier.pt',
+      lr=args.lr,
+      use_gpu=args.use_gpu,
+      epochs=args.epochs,
+      batch_size=8,
+      hidden_dropout_prob=args.hidden_dropout_prob,
+      train='data/ids-cfimdb-train.csv',
+      dev='data/ids-cfimdb-dev.csv',
+      test='data/ids-cfimdb-test-student.csv',
+      fine_tune_mode=args.fine_tune_mode,
+      dev_out='predictions/' + args.fine_tune_mode + '-cfimdb-dev-out.csv',
+      test_out='predictions/' + args.fine_tune_mode + '-cfimdb-test-out.csv',
+      subset=None,
+    )
 
-  print('Evaluating on cfimdb...')
-  test(config)
+    train(config)
+
+    print('Evaluating on cfimdb...')
+    test(config)
+
+
+  
